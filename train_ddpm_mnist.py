@@ -9,7 +9,6 @@ import torch
 import tqdm
 import os
 
-
 def rescale(x):
     return (x - x.min()) / (x.max() - x.min())
 
@@ -52,19 +51,19 @@ def sample(T, schedule, img_shape, unet, device):
 
 
 def main():
-
     # HyperParameters
     T = 1000
     beta_min = 1e-4
     beta_max = 0.02
-    U = 2
+    epochs = 30
+    lr = 0.0001
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    checkpoint = sorted(os.listdir("checkpoints/"),
-                        key=lambda x: int(x.split(".")[0].split("_")[-1]))
-
-    last_checkpoint = checkpoint[-1]
-
+    if not os.path.exists("checkpoints_mnist/"):
+        os.mkdir("checkpoints_mnist/")
+    if not os.path.exists("visuals_mnist/"):
+        os.mkdir("visuals_mnist/")
+    
     train_dataset = MNIST(
         "./data",
         download=True,
@@ -78,56 +77,42 @@ def main():
         train_dataset, batch_size=32, shuffle=True, num_workers=0
     )
 
-    unet = UNet2DModel(sample_size=(32, 32), in_channels=1,
-                       out_channels=1).to(device)
-
-    print("Loaded: ", f'./checkpoints/{last_checkpoint}')
-    unet.load_state_dict(torch.load(
-        f'./checkpoints/{last_checkpoint}', map_location=device))
+    unet = UNet2DModel(sample_size=(32, 32), in_channels=1, out_channels=1).to(device)
     schedule = compute_schedule(T, beta_min, beta_max, device)
+    optimizer = torch.optim.Adam(unet.parameters(), lr=lr)
 
-    x = next(iter(train))[0]
-    x = x.to(device)
+    pbar = tqdm.tqdm(range(1, epochs + 1))
+    for epoch in pbar:
+        acc_loss, denom = 0, 0
+        for x, _ in tqdm.tqdm(train):
+            x = x.to(device)
+            # Forward diffuse
+            ts = torch.randint(1, T + 1, (x.shape[0],), device=device)
+            eps = torch.randn(*x.shape, device=device)
 
-    mask = torch.ones_like(x)
-    mask[..., 8:22, 12:20] = 0
-    save_image(x , fp="original.png")
-    save_image(x * mask , fp="masked.png")
+            x_pass = (
+                schedule["sqrt_alpha_bar"][ts - 1][..., None, None, None] * x
+                + schedule["sqrt_one_minus_alpha_bar"][ts - 1][..., None, None, None]
+                * eps
+            )
 
-    seed = torch.randn_like(x, device=device)
+            pred = unet(x_pass, ts.float())["sample"]
+            loss = torch.nn.MSELoss()(pred, eps)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-    with torch.no_grad():
-        for t in tqdm.tqdm(range(T, 0, -1)):
-            for u in tqdm.tqdm(range(1, U+1)):
-                eps = torch.randn(
-                    *x.shape, device=device) if t > 1 else torch.zeros(*x.shape, device=device)
-                ts = torch.zeros(x.shape[0], device=device, dtype=torch.int32) + t
+            acc_loss += loss.item()
+            denom += x.shape[0]
 
-                # Known
-                x_t_known = schedule["sqrt_alpha_bar"][ts - 1] * x + \
-                    schedule["sqrt_one_minus_alpha_bar"][ts - 1] * eps
+        print("loss: ", str(acc_loss / denom))
 
-                # Unknown
-                z = torch.randn(
-                    *x.shape, device=device) if t > 1 else torch.zeros(*x.shape, device=device)
 
-                pred_eps = unet(seed, ts.float())["sample"]
-                term1 = schedule["oneover_sqrta"][t - 1]
-                term2 = seed - (schedule["mab_over_sqrtmab"][t - 1] * pred_eps)
-                term3 = z * schedule["std_t"][t - 1]
-                x_t_unknown = term1 * term2 + term3
+        torch.save(unet.state_dict(), f"checkpoints_mnist/mnist_{epoch}.pt")
 
-                # Compose
-                composed = mask * x_t_known + (1-mask) * x_t_unknown
-                
-                if u < U and t > 1:
-                    stdnorm = torch.randn_like(x, device=device)
-                    composed = torch.sqrt(schedule["alphas"][t - 2]) * composed + torch.sqrt(
-                        1 - schedule["alphas"][t - 2]) * stdnorm
-
-                seed = composed
-
-            save_image(seed, fp=f"{t}.png")
+        sampled_imgs = sample(T, schedule, [4] + list(x.shape[1:]), unet, device)
+        sampled_imgs = torchvision.utils.make_grid(sampled_imgs)
+        save_image(sampled_imgs, fp=f"visuals_mnist/{epoch}.png")
 
 
 if __name__ == "__main__":

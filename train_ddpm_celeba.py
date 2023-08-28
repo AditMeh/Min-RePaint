@@ -1,6 +1,6 @@
 from diffusers import UNet2DModel
 
-from torchvision.datasets import MNIST
+from torchvision.datasets import CelebA
 import torchvision.transforms as transforms
 from torchvision.utils import save_image
 import torchvision
@@ -59,25 +59,25 @@ def main():
     lr = 0.0001
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    if not os.path.exists("checkpoints/"):
-        os.mkdir("checkpoints/")
-    if not os.path.exists("visuals/"):
+    if not os.path.exists("checkpoints_celeba/"):
+        os.mkdir("checkpoints_celeba/")
+    if not os.path.exists("visuals_celeba/"):
         os.mkdir("visuals/")
     
-    train_dataset = MNIST(
-        "./data",
+    train_dataset = CelebA(
+        root="./data/celeba",
         download=True,
-        train=True,
+        split="train",
         transform=transforms.Compose(
-            [transforms.Resize((32, 32)), transforms.ToTensor()]
+            [transforms.Resize((128, 128)), transforms.ToTensor()]
         ),
     )
 
     train = torch.utils.data.DataLoader(
-        train_dataset, batch_size=32, shuffle=True, num_workers=0
+        train_dataset, batch_size=6, shuffle=True, num_workers=0
     )
 
-    unet = UNet2DModel(sample_size=(32, 32), in_channels=1, out_channels=1).to(device)
+    unet = UNet2DModel(sample_size=(128, 128), in_channels=3, out_channels=3).to(device)
     schedule = compute_schedule(T, beta_min, beta_max, device)
     optimizer = torch.optim.Adam(unet.parameters(), lr=lr)
 
@@ -86,6 +86,7 @@ def main():
         acc_loss, denom = 0, 0
         for x, _ in tqdm.tqdm(train):
             x = x.to(device)
+            
             # Forward diffuse
             ts = torch.randint(1, T + 1, (x.shape[0],), device=device)
             eps = torch.randn(*x.shape, device=device)
@@ -108,11 +109,11 @@ def main():
         print("loss: ", str(acc_loss / denom))
 
 
-        torch.save(unet.state_dict(), f"checkpoints/mnist_{epoch}.pt")
+        torch.save(unet.state_dict(), f"checkpoints_celeba/celeba_{epoch}.pt")
 
         sampled_imgs = sample(T, schedule, [4] + list(x.shape[1:]), unet, device)
         sampled_imgs = torchvision.utils.make_grid(sampled_imgs)
-        save_image(sampled_imgs, fp=f"visuals/{epoch}.png")
+        save_image(sampled_imgs, fp=f"visuals_celeba/{epoch}.png")
 
 
 if __name__ == "__main__":
