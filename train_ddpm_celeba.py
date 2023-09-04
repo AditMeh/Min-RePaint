@@ -50,19 +50,20 @@ def sample(T, schedule, img_shape, unet, device):
         return rescale(seed)
 
 
+
 def main():
     # HyperParameters
     T = 1000
     beta_min = 1e-4
     beta_max = 0.02
     epochs = 30
-    lr = 0.0001
+    lr = 0.00001
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if not os.path.exists("checkpoints_celeba/"):
         os.mkdir("checkpoints_celeba/")
     if not os.path.exists("visuals_celeba/"):
-        os.mkdir("visuals/")
+        os.mkdir("visuals_celeba/")
     
     train_dataset = CelebA(
         root="./data/celeba",
@@ -74,7 +75,7 @@ def main():
     )
 
     train = torch.utils.data.DataLoader(
-        train_dataset, batch_size=6, shuffle=True, num_workers=0
+        train_dataset, batch_size=22, shuffle=True, num_workers=0
     )
 
     unet = UNet2DModel(sample_size=(128, 128), in_channels=3, out_channels=3).to(device)
@@ -82,6 +83,7 @@ def main():
     optimizer = torch.optim.Adam(unet.parameters(), lr=lr)
 
     pbar = tqdm.tqdm(range(1, epochs + 1))
+    step = 0
     for epoch in pbar:
         acc_loss, denom = 0, 0
         for x, _ in tqdm.tqdm(train):
@@ -106,14 +108,22 @@ def main():
             acc_loss += loss.item()
             denom += x.shape[0]
 
+            step += 1
+            
+            if step % 2000 == 0:
+                sampled_imgs = sample(T, schedule, [4] + list(x.shape[1:]), unet, device)
+                save_image(rescale(sampled_imgs), fp=f"visuals_celeba/epoch_{epoch}_step_{step}.png")
+                torch.save(unet.state_dict(), f"checkpoints_celeba/epoch_{epoch}_step_{step}.pt")
+
+                
         print("loss: ", str(acc_loss / denom))
 
 
-        torch.save(unet.state_dict(), f"checkpoints_celeba/celeba_{epoch}.pt")
+        torch.save(unet.state_dict(), f"checkpoints_celeba/epoch_{epoch}_step_{step}.pt")
 
         sampled_imgs = sample(T, schedule, [4] + list(x.shape[1:]), unet, device)
         sampled_imgs = torchvision.utils.make_grid(sampled_imgs)
-        save_image(sampled_imgs, fp=f"visuals_celeba/{epoch}.png")
+        save_image(sampled_imgs, fp=f"visuals_celeba/epoch_{epoch}_step_{step}.png")
 
 
 if __name__ == "__main__":
